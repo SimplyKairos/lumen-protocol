@@ -43,7 +43,7 @@ Every receipt follows this canonical shape:
 }
 ```
 
-Full schema at [`packages/schema/receipt-schema.json`](./packages/schema/receipt-schema.json)
+Full schema at [`schema/receipt-schema.json`](./schema/receipt-schema.json)
 
 ---
 
@@ -248,16 +248,8 @@ function verifyWebhookSignature(
 ```bash
 git clone https://github.com/SimplyKairos/lumen-protocol
 cd lumen-protocol
-
-# API
-cd apps/api
 cp .env.example .env
 # fill in HELIUS_API_KEY, BACKEND_KEYPAIR, JITO_BLOCK_ENGINE_URL
-npm install
-npm run dev
-
-# Frontend
-cd apps/web
 npm install
 npm run dev
 ```
