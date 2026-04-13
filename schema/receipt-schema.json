@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LumenReceipt",
+  "description": "Canonical execution fairness receipt for Jito bundle transactions on Solana",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receiptId",
+    "txSignature",
+    "bundleId",
+    "slot",
+    "confirmationStatus",
+    "receiptHash",
+    "onChainMemo",
+    "attestationLevel",
+    "walletAddress",
+    "verified",
+    "createdAt"
+  ],
+  "properties": {
+    "receiptId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "txSignature": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bundleId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "slot": {
+      "type": "integer"
+    },
+    "confirmationStatus": {
+      "type": "string",
+      "minLength": 1
+    },
+    "receiptHash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "onChainMemo": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attestationLevel": {
+      "type": "string",
+      "enum": [
+        "BUNDLE_VERIFIED",
+        "BAM_ATTESTED"
+      ]
+    },
+    "walletAddress": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "createdAt": {
+      "type": "integer"
+    }
+  },
+  "examples": [
+    {
+      "receiptId": "2a4a8d02-a9e4-4d3f-b711-2c02d6b6b77d",
+      "txSignature": "5eLhG3uD7J3F2W8PjK8qf1Z9nA2Y3dQ6bQ9qkR3fQ8xM",
+      "bundleId": "892b79ed49138bfb3aa5441f0df6e06ef34f9ee8f3976c15b323605bae0cf51d",
+      "slot": 242804011,
+      "confirmationStatus": "finalized",
+      "receiptHash": "a3f8c2e91b4d",
+      "onChainMemo": null,
+      "attestationLevel": "BUNDLE_VERIFIED",
+      "walletAddress": null,
+      "verified": false,
+      "createdAt": 1775300964000
+    }
+  ]
+}
