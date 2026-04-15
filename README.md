@@ -51,6 +51,17 @@ Full schema at [`schema/receipt-schema.json`](./schema/receipt-schema.json)
 
 Base URL: `https://api.lumenlayer.tech`
 
+### Rate limits
+
+| Endpoint | Limit |
+|----------|-------|
+| `POST /api/v1/stamp` | 10 requests per minute per IP |
+| All other endpoints | No limit |
+
+Returns `429` with `{ "error": "Rate limit exceeded. Maximum 10 stamp requests per minute per IP." }` if exceeded.
+
+---
+
 ### Issue a receipt
 
 ```http
