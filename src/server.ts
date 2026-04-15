@@ -50,9 +50,33 @@ import {
   createLaunchTradeReceipt,
   type LaunchTradeServiceDependencies,
 } from './launch-trade-service'
+import {
+  claimUsernameBodySchema,
+  type ClaimUsernameBody,
+  userProfileSchema,
+  userWalletParamsSchema,
+} from './user'
+import {
+  claimUsername,
+  getUserProfile,
+} from './user-service'
+import {
+  latestBlockhashSchema,
+  relayTransactionBodySchema,
+  relayTransactionResponseSchema,
+  walletAddressParamsSchema,
+  walletOverviewSchema,
+} from './wallet'
+import {
+  getLatestBlockhash,
+  getWalletOverview,
+  relaySerializedTransaction,
+} from './wallet-service'
+import { verifyLaunchpadAuth } from './auth'
 import 'dotenv/config'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import rateLimit from '@fastify/rate-limit'
 
 const stampBodySchema = {
   type: 'object',
@@ -120,6 +144,13 @@ export function buildServer(deps: BuildServerDependencies = {}) {
     origin: '*'
   })
 
+  server.register(rateLimit, {
+    global: false,
+    errorResponseBuilder: (_request, context) => ({
+      error: `Rate limit exceeded. Maximum ${context.max} stamp requests per minute per IP.`,
+    }),
+  })
+
   // Health check
   server.get('/health', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() }
@@ -128,6 +159,12 @@ export function buildServer(deps: BuildServerDependencies = {}) {
   // PROTOCOL ROUTES
   // POST /api/v1/stamp — submit a transaction for receipt generation
   server.post('/api/v1/stamp', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+      },
+    },
     schema: {
       body: stampBodySchema,
       response: {
@@ -135,6 +172,7 @@ export function buildServer(deps: BuildServerDependencies = {}) {
         201: receiptSchema,
         400: apiErrorSchema,
         422: stampErrorSchema,
+        429: apiErrorSchema,
         503: stampErrorSchema,
         500: stampErrorSchema,
       },
@@ -256,12 +294,29 @@ export function buildServer(deps: BuildServerDependencies = {}) {
       body: launchCreateBodySchema,
       response: {
         201: launchSchema,
+        401: apiErrorSchema,
         500: apiErrorSchema,
       },
     },
   }, async (request, reply) => {
+    const launchBody = request.body as LaunchCreateBody
+
     try {
-      const launch = await createLaunch(request.body as LaunchCreateBody, deps)
+      const authIsValid = verifyLaunchpadAuth({
+        walletAddress: launchBody.creatorWallet,
+        purpose: 'launch-create',
+        timestamp: launchBody.authTimestamp,
+        signature: launchBody.authSignature,
+        message: launchBody.authMessage,
+      })
+
+      if (!authIsValid) {
+        return reply.code(401).send({
+          error: 'Wallet authorization failed. Reconnect your wallet and try again.',
+        })
+      }
+
+      const launch = await createLaunch(launchBody, deps)
       return reply.code(201).send(launch)
     } catch (err) {
       server.log.error(err)
@@ -409,6 +464,139 @@ export function buildServer(deps: BuildServerDependencies = {}) {
     }
   })
 
+  // USER PROFILE ROUTES
+  // GET /api/v1/users/:walletAddress — get wallet-linked launchpad profile
+  server.get('/api/v1/users/:walletAddress', {
+    schema: {
+      params: userWalletParamsSchema,
+      response: {
+        200: userProfileSchema,
+        500: apiErrorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const { walletAddress } = request.params as { walletAddress: string }
+
+    try {
+      return reply.send(getUserProfile(walletAddress))
+    } catch (err) {
+      server.log.error(err)
+      return reply.code(500).send({ error: 'Failed to fetch launchpad user profile' })
+    }
+  })
+
+  // POST /api/v1/users/username — claim or update a launchpad username
+  server.post('/api/v1/users/username', {
+    schema: {
+      body: claimUsernameBodySchema,
+      response: {
+        200: userProfileSchema,
+        400: apiErrorSchema,
+        401: apiErrorSchema,
+        409: apiErrorSchema,
+        500: apiErrorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const {
+      walletAddress,
+      username,
+      authMessage,
+      authSignature,
+      authTimestamp,
+    } = request.body as ClaimUsernameBody
+
+    try {
+      const authIsValid = verifyLaunchpadAuth({
+        walletAddress,
+        purpose: 'username-claim',
+        timestamp: authTimestamp,
+        signature: authSignature,
+        message: authMessage,
+      })
+
+      if (!authIsValid) {
+        return reply.code(401).send({
+          error: 'Wallet authorization failed. Reconnect your wallet and try again.',
+        })
+      }
+
+      return reply.send(claimUsername(walletAddress, username))
+    } catch (err) {
+      if (err instanceof Error && err.message === 'invalid_username') {
+        return reply.code(400).send({
+          error: 'Username must be 3-24 characters and use only letters, numbers, underscores, or hyphens.',
+        })
+      }
+
+      if (err instanceof Error && err.message === 'username_taken') {
+        return reply.code(409).send({ error: 'That username is already taken.' })
+      }
+
+      server.log.error(err)
+      return reply.code(500).send({ error: 'Failed to claim username' })
+    }
+  })
+
+  // WALLET ROUTES
+  // GET /api/v1/wallets/:walletAddress/overview — wallet balance and holdings summary
+  server.get('/api/v1/wallets/:walletAddress/overview', {
+    schema: {
+      params: walletAddressParamsSchema,
+      response: {
+        200: walletOverviewSchema,
+        500: apiErrorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const { walletAddress } = request.params as { walletAddress: string }
+
+    try {
+      return reply.send(await getWalletOverview(walletAddress))
+    } catch (err) {
+      server.log.error(err)
+      return reply.code(500).send({ error: 'Failed to fetch wallet overview' })
+    }
+  })
+
+  // GET /api/v1/wallets/latest-blockhash — latest blockhash for client-signed transactions
+  server.get('/api/v1/wallets/latest-blockhash', {
+    schema: {
+      response: {
+        200: latestBlockhashSchema,
+        500: apiErrorSchema,
+      },
+    },
+  }, async (_request, reply) => {
+    try {
+      return reply.send(await getLatestBlockhash())
+    } catch (err) {
+      server.log.error(err)
+      return reply.code(500).send({ error: 'Failed to fetch latest blockhash' })
+    }
+  })
+
+  // POST /api/v1/wallets/relay — relay a fully signed transaction through the configured RPC stack
+  server.post('/api/v1/wallets/relay', {
+    schema: {
+      body: relayTransactionBodySchema,
+      response: {
+        200: relayTransactionResponseSchema,
+        500: apiErrorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const { transaction } = request.body as { transaction: string }
+
+    try {
+      const signature = await relaySerializedTransaction(transaction)
+      return reply.send({ signature })
+    } catch (err) {
+      server.log.error(err)
+      return reply.code(500).send({ error: 'Failed to relay transaction' })
+    }
+  })
+
   // WEBHOOK ROUTE
   // POST /api/v1/webhooks — register an external receipt-issued webhook
   server.post('/api/v1/webhooks', {
@@ -481,11 +669,21 @@ export function buildServer(deps: BuildServerDependencies = {}) {
 
 // Start server
 export const start = async () => {
+  const REQUIRED_ENV_VARS = ['HELIUS_RPC_MAINNET', 'BACKEND_KEYPAIR', 'JITO_BLOCK_ENGINE_URL'] as const
+  const missingVars = REQUIRED_ENV_VARS.filter((key) => !process.env[key])
+
+  if (missingVars.length > 0) {
+    console.error(`[startup] Missing required environment variables: ${missingVars.join(', ')}`)
+    console.error('[startup] Server will not start. Set all required env vars and retry.')
+    process.exit(1)
+  }
+
+  const port = Number(process.env.PORT) || 3001
   const server = buildServer()
 
   try {
-    await server.listen({ port: 3001, host: '0.0.0.0' })
-    console.log('Lumen API running on port 3001')
+    await server.listen({ port, host: '0.0.0.0' })
+    console.log(`Lumen API running on port ${port}`)
     return server
   } catch (err) {
     server.log.error(err)

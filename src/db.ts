@@ -94,12 +94,17 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     wallet_address TEXT PRIMARY KEY,
+    username TEXT,
     total_trades INTEGER DEFAULT 0,
     total_receipts INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
-    last_active INTEGER
+    last_active INTEGER,
+    updated_at INTEGER
   )
 `)
+
+ensureColumn('users', 'username', 'username TEXT')
+ensureColumn('users', 'updated_at', 'updated_at INTEGER')
 
 // WEBHOOK SUBSCRIPTIONS TABLE
 // External integrators that receive receipt-issued events
@@ -128,6 +133,12 @@ db.exec(`
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_launches_creator_wallet
   ON launches (creator_wallet)
+`)
+
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique
+  ON users (username COLLATE NOCASE)
+  WHERE username IS NOT NULL
 `)
 
 db.exec(`

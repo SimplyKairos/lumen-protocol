@@ -6,7 +6,7 @@ import {
   type VersionedTransactionResponse,
   sendAndConfirmTransaction,
 } from '@solana/web3.js'
-import { connection } from './bam-service'
+import { withConnectionFallback } from './bam-service'
 
 export interface MemoTransactionData {
   signature: string
@@ -70,10 +70,12 @@ export async function getMemoTransactionData(
   signature: string
 ): Promise<MemoTransactionLookupResult> {
   try {
-    const transaction = await connection.getTransaction(signature, {
-      commitment: 'confirmed',
-      maxSupportedTransactionVersion: 0,
-    })
+    const transaction = await withConnectionFallback((conn) =>
+      conn.getTransaction(signature, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      })
+    )
 
     if (!transaction) {
       return { status: 'not_found' }
@@ -107,7 +109,9 @@ export async function anchorReceiptHash(
   }
 
   try {
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+    const { blockhash, lastValidBlockHeight } = await withConnectionFallback((conn) =>
+      conn.getLatestBlockhash('confirmed')
+    )
 
     const transaction = new Transaction({
       feePayer: signer.publicKey,
@@ -115,11 +119,8 @@ export async function anchorReceiptHash(
     }).add(createMemoInstruction(receiptHash))
     transaction.lastValidBlockHeight = lastValidBlockHeight
 
-    const memoSignature = await sendAndConfirmTransaction(
-      connection,
-      transaction,
-      [signer],
-      { commitment: 'confirmed' }
+    const memoSignature = await withConnectionFallback((conn) =>
+      sendAndConfirmTransaction(conn, transaction, [signer], { commitment: 'confirmed' })
     )
 
     const memoTransaction = await getMemoTransactionData(memoSignature)

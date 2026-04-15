@@ -1,11 +1,44 @@
 import 'dotenv/config'
 import { Connection } from '@solana/web3.js'
 
-const RPC_URL = process.env.SOLANA_NETWORK === 'devnet'
-  ? process.env.HELIUS_RPC_DEVNET!
-  : process.env.HELIUS_RPC_MAINNET!
+const PRIMARY_RPC_URL = process.env.ALCHEMY_RPC_URL
+const SECONDARY_RPC_URL = process.env.QUICKNODE_RPC_URL
+const HELIUS_RPC_URL = process.env.SOLANA_NETWORK === 'devnet'
+  ? process.env.HELIUS_RPC_DEVNET
+  : process.env.HELIUS_RPC_MAINNET
 
-export const connection = new Connection(RPC_URL, 'confirmed')
+function createConnection(url?: string) {
+  return url ? new Connection(url, 'confirmed') : null
+}
+
+const primaryConnection = createConnection(PRIMARY_RPC_URL)
+const secondaryConnection = createConnection(SECONDARY_RPC_URL)
+const heliusConnection = createConnection(HELIUS_RPC_URL)
+
+// Ordered list of available connections; callers iterate until one succeeds.
+const rpcConnections = [primaryConnection, secondaryConnection, heliusConnection].filter(Boolean) as Connection[]
+
+if (rpcConnections.length === 0) {
+  throw new Error('No Solana RPC URLs configured. Set ALCHEMY_RPC_URL, QUICKNODE_RPC_URL, or HELIUS_RPC_MAINNET.')
+}
+
+export async function withConnectionFallback<T>(operation: (connection: Connection) => Promise<T>): Promise<T> {
+  let lastError: unknown = null
+
+  for (const connection of rpcConnections) {
+    try {
+      return await operation(connection)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError ?? new Error('rpc_unavailable')
+}
+
+// Keep a stable export for callers that need a Connection object directly (e.g. submitBundle).
+// This points to the first available connection; stamp/verify paths use withConnectionFallback instead.
+export const connection = rpcConnections[0]
 
 const JITO_URL = process.env.JITO_BLOCK_ENGINE_URL || 'https://mainnet.block-engine.jito.wtf'
 
