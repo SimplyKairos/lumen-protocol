@@ -124,6 +124,7 @@ GET /api/v1/verify/:receiptId
 | Status | Meaning |
 |--------|---------|
 | `VERIFIED` | Hash recomputed, matches on-chain memo — execution context confirmed |
+| `ANCHOR_NOT_FOUND` | On-chain memo transaction not found on any RPC |
 | `ANCHOR_LOOKUP_FAILED` | Hash exists but on-chain memo lookup failed |
 | `MEMO_MISMATCH` | On-chain memo found but data does not match receipt hash |
 | `HASH_MISMATCH` | Recomputed hash does not match stored receipt hash |
@@ -148,20 +149,28 @@ POST /api/v1/webhooks
 Content-Type: application/json
 
 {
-  "url": "https://your-endpoint.com/lumen-webhook",
-  "events": ["receipt.issued"]
+  "targetUrl": "https://your-endpoint.com/lumen-webhook",
+  "eventType": "receipt.issued"
 }
 ```
 
 **Response**
 ```json
 {
-  "subscriptionId": "uuid",
-  "secret": "hmac_secret_for_signature_verification"
+  "subscription": {
+    "subscriptionId": "uuid",
+    "targetUrl": "https://your-endpoint.com/lumen-webhook",
+    "eventType": "receipt.issued",
+    "active": true,
+    "signingSecretMasked": "lumsec...c3f9",
+    "createdAt": 1775479278783,
+    "updatedAt": 1775479278783
+  },
+  "signingSecret": "hmac_secret_for_signature_verification"
 }
 ```
 
-Each delivery is signed with `HMAC-SHA256` using your subscription secret. Verify the `X-Lumen-Signature` header on every incoming webhook.
+Each delivery is signed with `HMAC-SHA256` using your subscription secret. Verify the `X-Lumen-Signature` header together with `X-Lumen-Timestamp` on every incoming webhook.
 
 ---
 
@@ -173,12 +182,12 @@ GET /api/v1/webhooks/:subscriptionId/deliveries
 
 ---
 
-## Integrating Lumen into your launchpad
+## Integrating Lumen into your app
 
-The integration is one API call per trade. After your trade transaction lands on-chain, call the stamp endpoint with the transaction signature and Jito bundle ID:
+The integration is one API call per stamped transaction. After your transaction lands on-chain, call the stamp endpoint with the transaction signature and Jito bundle ID:
 
 ```typescript
-async function stampTrade(txSignature: string, bundleId: string, walletAddress: string) {
+async function stampTransaction(txSignature: string, bundleId: string, walletAddress: string) {
   const response = await fetch('https://api.lumenlayer.tech/api/v1/stamp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -218,8 +227,9 @@ When a receipt is issued your subscribed endpoint receives:
 
 ```json
 {
-  "event": "receipt.issued",
-  "timestamp": 1775479278783,
+  "eventId": "evt_123",
+  "eventType": "receipt.issued",
+  "createdAt": 1775479278783,
   "receipt": {
     "receiptId": "ba30a96e-...",
     "txSignature": "5xNpK...",
@@ -229,6 +239,7 @@ When a receipt is issued your subscribed endpoint receives:
     "receiptHash": "7b3b0308...",
     "onChainMemo": "memo_tx_signature",
     "attestationLevel": "BUNDLE_VERIFIED",
+    "walletAddress": "6P8Y...",
     "verified": true,
     "createdAt": 1775479278783
   }
@@ -243,10 +254,11 @@ import { createHmac } from 'crypto'
 function verifyWebhookSignature(
   payload: string,
   signature: string,
+  timestamp: string,
   secret: string
 ): boolean {
   const expected = createHmac('sha256', secret)
-    .update(payload)
+    .update(`${timestamp}.${payload}`)
     .digest('hex')
   return `sha256=${expected}` === signature
 }
@@ -260,10 +272,12 @@ function verifyWebhookSignature(
 git clone https://github.com/SimplyKairos/lumen-protocol
 cd lumen-protocol
 cp .env.example .env
-# fill in HELIUS_API_KEY, BACKEND_KEYPAIR, JITO_BLOCK_ENGINE_URL
+# fill in HELIUS_RPC_MAINNET, BACKEND_KEYPAIR, JITO_BLOCK_ENGINE_URL
 npm install
 npm run dev
 ```
+
+The server creates its local SQLite store automatically at `data/lumen.db` on first boot.
 
 ---
 
