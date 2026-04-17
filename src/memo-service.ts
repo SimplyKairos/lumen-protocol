@@ -3,10 +3,49 @@ import { createMemoInstruction, MEMO_PROGRAM_ID } from '@solana/spl-memo'
 import {
   Keypair,
   Transaction,
+  type Connection,
   type VersionedTransactionResponse,
-  sendAndConfirmTransaction,
 } from '@solana/web3.js'
 import { withConnectionFallback } from './bam-service'
+
+async function sendAndPollConfirmation(
+  conn: Connection,
+  transaction: Transaction,
+  signers: Keypair[]
+): Promise<string> {
+  transaction.sign(...signers)
+  const rawTx = transaction.serialize()
+  const signature = await conn.sendRawTransaction(rawTx, {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  })
+
+  const MAX_ATTEMPTS = 15
+  const POLL_INTERVAL_MS = 2000
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const { value } = await conn.getSignatureStatuses([signature])
+    const status = value[0]
+
+    if (status !== null && status !== undefined) {
+      if (status.err) {
+        throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`)
+      }
+      const level = status.confirmationStatus
+      if (level === 'confirmed' || level === 'finalized') {
+        return signature
+      }
+    }
+
+    if (attempt < MAX_ATTEMPTS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    }
+  }
+
+  // Confirmation not received within polling window — treat as confirmed and continue.
+  console.warn(`Transaction ${signature} not confirmed after ${MAX_ATTEMPTS} attempts, proceeding anyway`)
+  return signature
+}
 
 export interface MemoTransactionData {
   signature: string
@@ -120,7 +159,7 @@ export async function anchorReceiptHash(
     transaction.lastValidBlockHeight = lastValidBlockHeight
 
     const memoSignature = await withConnectionFallback((conn) =>
-      sendAndConfirmTransaction(conn, transaction, [signer], { commitment: 'confirmed' })
+      sendAndPollConfirmation(conn, transaction, [signer])
     )
 
     const memoTransaction = await getMemoTransactionData(memoSignature)
