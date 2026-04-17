@@ -91,7 +91,8 @@ Content-Type: application/json
 }
 ```
 
-Stamping is idempotent on `txSignature` — submitting the same transaction twice returns the existing receipt.
+- Stamping is idempotent on `txSignature` — submitting the same transaction twice returns the existing receipt.
+- Stamp requests typically complete in 5–15 seconds while the on-chain memo confirms. Plan for async handling in your integration.
 
 ---
 
