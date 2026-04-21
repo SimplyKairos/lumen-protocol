@@ -26,6 +26,7 @@ import {
   webhookSubscriptionCreateBodySchema,
   webhookSubscriptionParamsSchema,
 } from './webhook'
+import { blinkRoutes } from './routes/blinks'
 import 'dotenv/config'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
@@ -102,9 +103,44 @@ export function buildServer(deps: BuildServerDependencies = {}) {
     }),
   })
 
+  server.register(blinkRoutes)
+
   // Health check
   server.get('/health', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() }
+  })
+
+  server.get('/', async (_request, reply) => {
+    return reply.send({
+      name: 'Lumen Protocol API',
+      version: '1.0.0',
+      description: 'Open execution fairness protocol for Solana',
+      docs: 'https://github.com/SimplyKairos/lumen-protocol',
+      endpoints: {
+        stamp: 'POST /api/v1/stamp',
+        verify: 'GET /api/v1/verify/:receiptId',
+        receipts: 'GET /api/v1/receipts',
+        webhooks: 'POST /api/v1/webhooks',
+        blinks: 'GET /api/v1/blink/verify/:receiptId'
+      }
+    })
+  })
+
+  // Solana Blinks actions manifest
+  server.get('/actions.json', async (_request, reply) => {
+    return reply
+      .header('Access-Control-Allow-Origin', '*')
+      .header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+      .header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept-Encoding')
+      .header('Content-Type', 'application/json')
+      .send({
+        rules: [
+          {
+            pathPattern: '/api/v1/blink/**',
+            apiPath: '/api/v1/blink/**'
+          }
+        ]
+      })
   })
 
   // PROTOCOL ROUTES
@@ -310,7 +346,7 @@ export function buildServer(deps: BuildServerDependencies = {}) {
 
 // Start server
 export const start = async () => {
-  const REQUIRED_ENV_VARS = ['HELIUS_RPC_MAINNET', 'BACKEND_KEYPAIR', 'JITO_BLOCK_ENGINE_URL'] as const
+  const REQUIRED_ENV_VARS = ['ALCHEMY_RPC_URL', 'HELIUS_RPC_MAINNET', 'BACKEND_KEYPAIR', 'JITO_BLOCK_ENGINE_URL'] as const
   const missingVars = REQUIRED_ENV_VARS.filter((key) => !process.env[key])
 
   if (missingVars.length > 0) {
