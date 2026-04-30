@@ -1,306 +1,300 @@
 # Lumen Protocol
 
-> Open execution fairness protocol for Solana.
+> Open execution fairness standard for Solana.
 
-Lumen issues cryptographically verifiable execution receipts for Solana transactions. Every receipt is SHA-256 bound to real Jito bundle execution context and anchored permanently on-chain via the Solana memo program. Anyone can independently verify any receipt without trusting Lumen.
+## What this is
 
-## How it works
+Lumen is an open standard for cryptographically verifiable execution receipts on
+Solana. Receipts bind every transaction to its Jito bundle execution context,
+score execution quality with a deterministic algorithm, hash the result, and
+anchor the digest on-chain via the Solana memo program. Anyone can recompute the
+hash and verify the receipt independently.
 
-1. Caller submits a transaction signature and bundle ID to the stamp endpoint
-2. Lumen calls `getBundleStatuses` — extracts `bundleId`, `slot`, `confirmationStatus`
-3. Computes `SHA-256(txSignature || bundleId || slot)`
-4. Writes the digest on-chain as a Solana memo transaction
-5. Anyone can recompute the hash and verify it matches the on-chain memo
+This repo is the protocol specification: schema, hash pre-image definition, EQS
+scoring algorithm, attestation tiers, webhook contract, and integration
+examples. The reference implementation runs at `api.lumenlayer.tech`. You can
+call it directly, which is the recommended path, or implement your own
+Lumen-compliant issuer using only what is in this repo.
 
-**Attestation levels**
+## Quick start
 
-| Level | Description |
-|-------|-------------|
-| `BUNDLE_VERIFIED` | Confirmed via Jito bundle execution metadata, anchored on-chain |
-| `BAM_ATTESTED` | Full TEE attestation digest bound to receipt (upgrade path ready) |
+This command stamps a known public transaction and bundle. Stamp requests are
+idempotent on `txSignature`, so rerunning the command returns the existing
+receipt for that transaction.
 
-Current receipts are issued as `BUNDLE_VERIFIED`. Per-bundle BAM TEE attestation digests are not yet publicly accessible via API. The schema is designed for a clean upgrade to `BAM_ATTESTED` when access becomes available — no changes to the core receipt contract required.
+```sh
+curl -sS -X POST https://api.lumenlayer.tech/api/v1/stamp \
+  -H "Content-Type: application/json" \
+  --data '{
+    "txSignature": "4rLD5XfdvrmQJfKqVArBsGs7qCwCbhi8z53gkgCzMUAgvzGArTS4UP4qpN5fhM7r9uW19yM8d1Z8mcJwFLhzqcQW",
+    "bundleId": "030c9d74fa6adedbab3c8a124e26898de4fe555b6b6d349c47bf8fc0bea3e5cc",
+    "walletAddress": null
+  }'
+```
 
----
-
-## Receipt schema
-
-Every receipt follows this canonical shape:
+A canonical v2 receipt has this shape:
 
 ```json
 {
-  "receiptId": "uuid",
-  "txSignature": "string",
-  "bundleId": "string",
-  "slot": "number",
-  "confirmationStatus": "confirmed | finalized",
-  "receiptHash": "sha256hex",
-  "onChainMemo": "solana_tx_signature | null",
-  "attestationLevel": "BUNDLE_VERIFIED | BAM_ATTESTED",
-  "walletAddress": "string | null",
-  "verified": "boolean",
-  "createdAt": "unix_ms"
-}
-```
-
-Full schema at [`schema/receipt-schema.json`](./schema/receipt-schema.json)
-
----
-
-## API
-
-Base URL: `https://api.lumenlayer.tech`
-
-### Rate limits
-
-| Endpoint | Limit |
-|----------|-------|
-| `POST /api/v1/stamp` | 10 requests per minute per IP |
-| All other endpoints | No limit |
-
-Returns `429` with `{ "error": "Rate limit exceeded. Maximum 10 stamp requests per minute per IP." }` if exceeded.
-
----
-
-### Issue a receipt
-
-```http
-POST /api/v1/stamp
-Content-Type: application/json
-
-{
-  "txSignature": "your_solana_tx_signature",
-  "bundleId": "your_jito_bundle_id",
-  "walletAddress": "optional_wallet_address"
-}
-```
-
-**Response**
-```json
-{
-  "receiptId": "ba30a96e-0de3-4d64-bff9-faecd1549377",
-  "txSignature": "5xNpK...",
-  "bundleId": "jito-bundle-...",
-  "slot": 324901882,
-  "confirmationStatus": "confirmed",
-  "receiptHash": "7b3b0308ca82b01041344e5ab1c2556d902e25eda13e824346e2ac2d7b80144e",
-  "onChainMemo": "memo_tx_signature",
+  "receiptId": "de60f7d6-7cb3-413c-a4cf-d933931ac62b",
+  "txSignature": "4rLD5XfdvrmQJfKqVArBsGs7qCwCbhi8z53gkgCzMUAgvzGArTS4UP4qpN5fhM7r9uW19yM8d1Z8mcJwFLhzqcQW",
+  "bundleId": "030c9d74fa6adedbab3c8a124e26898de4fe555b6b6d349c47bf8fc0bea3e5cc",
+  "slot": 414075157,
+  "confirmationStatus": "finalized",
+  "receiptHash": "54fc08881bed02c6ff6de298940b0a4e4dde8d40bc802fe2a716e1112e31e2f6",
+  "onChainMemo": "3zhKUuydLBtuMEHpBLnoBrTN4s7YAaqS71Mk4qLCPp4nYQvjbS1BJGkAM8E6CJgeY149oET6TGhZQACwoBkDi3Q7",
   "attestationLevel": "BUNDLE_VERIFIED",
+  "walletAddress": null,
   "verified": true,
-  "createdAt": 1775479278783
-}
-```
-
-- Stamping is idempotent on `txSignature` — submitting the same transaction twice returns the existing receipt.
-- Stamp requests typically complete in 5–15 seconds while the on-chain memo confirms. Plan for async handling in your integration.
-
----
-
-### Verify a receipt
-
-```http
-GET /api/v1/verify/:receiptId
-```
-
-**Response**
-```json
-{
-  "receiptId": "ba30a96e-...",
-  "verificationStatus": "VERIFIED",
-  "attestationLevel": "BUNDLE_VERIFIED",
-  "hashMatches": true,
-  "memoMatches": true,
-  "verified": true,
-  "txSignature": "5xNpK...",
-  "bundleId": "jito-bundle-...",
-  "slot": 324901882,
-  "receiptHash": "7b3b0308...",
-  "onChainMemo": "memo_tx_signature",
-  "createdAt": 1775479278783
-}
-```
-
-**Verification status values**
-
-| Status | Meaning |
-|--------|---------|
-| `VERIFIED` | Hash recomputed, matches on-chain memo — execution context confirmed |
-| `ANCHOR_NOT_FOUND` | On-chain memo transaction not found on any RPC |
-| `ANCHOR_LOOKUP_FAILED` | Hash exists but on-chain memo lookup failed |
-| `MEMO_MISMATCH` | On-chain memo found but data does not match receipt hash |
-| `HASH_MISMATCH` | Recomputed hash does not match stored receipt hash |
-| `UNANCHORED` | Receipt issued but memo not yet written to chain |
-
----
-
-### List recent receipts
-
-```http
-GET /api/v1/receipts
-```
-
-Returns the 50 most recent receipts with `verificationStatus` inline — no additional verification requests needed.
-
----
-
-### Register a webhook subscription
-
-```http
-POST /api/v1/webhooks
-Content-Type: application/json
-
-{
-  "targetUrl": "https://your-endpoint.com/lumen-webhook",
-  "eventType": "receipt.issued"
-}
-```
-
-**Response**
-```json
-{
-  "subscription": {
-    "subscriptionId": "uuid",
-    "targetUrl": "https://your-endpoint.com/lumen-webhook",
-    "eventType": "receipt.issued",
-    "active": true,
-    "signingSecretMasked": "lumsec...c3f9",
-    "createdAt": 1775479278783,
-    "updatedAt": 1775479278783
-  },
-  "signingSecret": "hmac_secret_for_signature_verification"
-}
-```
-
-Each delivery is signed with `HMAC-SHA256` using your subscription secret. Verify the `X-Lumen-Signature` header together with `X-Lumen-Timestamp` on every incoming webhook.
-
----
-
-### Inspect webhook delivery history
-
-```http
-GET /api/v1/webhooks/:subscriptionId/deliveries
-```
-
----
-
-## Integrating Lumen into your app
-
-The integration is one API call per stamped transaction. After your transaction lands on-chain, call the stamp endpoint with the transaction signature and Jito bundle ID:
-
-```typescript
-async function stampTransaction(txSignature: string, bundleId: string, walletAddress: string) {
-  const response = await fetch('https://api.lumenlayer.tech/api/v1/stamp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ txSignature, bundleId, walletAddress }),
-  })
-
-  const receipt = await response.json()
-
-  // receipt.receiptId — share with the trader
-  // receipt.receiptHash — the SHA-256 execution proof
-  // receipt.verified — true if anchored and confirmed
-  // receipt.attestationLevel — BUNDLE_VERIFIED
-
-  return receipt
-}
-```
-
-Show the `receiptId` to your users. They can verify it at any time at `https://lumenlayer.tech/verify?receiptId=RECEIPT_ID` or by calling the verify endpoint directly.
-
----
-
-## Verifiable receipt link
-
-Every receipt has a shareable public URL:
-
-```
-https://lumenlayer.tech/verify?receiptId=RECEIPT_ID
-```
-
-Users can paste this link into any browser and independently verify execution context without trusting your platform or Lumen.
-
----
-
-## Webhook payload
-
-When a receipt is issued your subscribed endpoint receives:
-
-```json
-{
-  "eventId": "evt_123",
-  "eventType": "receipt.issued",
-  "createdAt": 1775479278783,
-  "receipt": {
-    "receiptId": "ba30a96e-...",
-    "txSignature": "5xNpK...",
-    "bundleId": "jito-bundle-...",
-    "slot": 324901882,
-    "confirmationStatus": "confirmed",
-    "receiptHash": "7b3b0308...",
-    "onChainMemo": "memo_tx_signature",
-    "attestationLevel": "BUNDLE_VERIFIED",
-    "walletAddress": "6P8Y...",
-    "verified": true,
-    "createdAt": 1775479278783
+  "createdAt": 1776530306174,
+  "schemaVersion": "v2",
+  "executionQuality": {
+    "score": 40,
+    "flags": ["SANDWICH_DETECTED"],
+    "flagsBitmap": 64,
+    "algoVersion": "eqs-v1"
   }
 }
 ```
 
-Verify the signature:
+For a real integration, replace both identifiers with the transaction signature
+and Jito bundle ID from your own execution path. The stamp endpoint verifies
+that the transaction is present in the submitted bundle before issuing a
+receipt. If the bundle cannot be checked yet, the API returns a retryable error
+rather than issuing a weak receipt.
 
-```typescript
-import { createHmac } from 'crypto'
+## Receipt schema
 
-function verifyWebhookSignature(
-  payload: string,
-  signature: string,
-  timestamp: string,
-  secret: string
-): boolean {
-  const expected = createHmac('sha256', secret)
-    .update(`${timestamp}.${payload}`)
-    .digest('hex')
-  return `sha256=${expected}` === signature
+The formal schema is
+[`schema/receipt-schema.json`](schema/receipt-schema.json). The v2 API shape
+uses an `executionQuality` object because that is the field layout exposed by
+the production schema package.
+
+```jsonc
+{
+  "receiptId": "de60f7d6-7cb3-413c-a4cf-d933931ac62b", // UUID receipt identifier.
+  "txSignature": "4rLD5XfdvrmQJfKqVArBsGs7qCwCbhi8z53gkgCzMUAgvzGArTS4UP4qpN5fhM7r9uW19yM8d1Z8mcJwFLhzqcQW", // Solana transaction signature.
+  "bundleId": "030c9d74fa6adedbab3c8a124e26898de4fe555b6b6d349c47bf8fc0bea3e5cc", // Jito bundle ID.
+  "slot": 414075157, // Landed bundle slot.
+  "confirmationStatus": "finalized", // "confirmed" or "finalized".
+  "receiptHash": "54fc08881bed02c6ff6de298940b0a4e4dde8d40bc802fe2a716e1112e31e2f6", // Canonical SHA-256 digest.
+  "onChainMemo": "3zhKUuydLBtuMEHpBLnoBrTN4s7YAaqS71Mk4qLCPp4nYQvjbS1BJGkAM8E6CJgeY149oET6TGhZQACwoBkDi3Q7", // Memo anchor transaction signature, or null.
+  "attestationLevel": "BUNDLE_VERIFIED", // "BUNDLE_VERIFIED" or reserved "BAM_ATTESTED".
+  "walletAddress": null, // Optional wallet address supplied by the integrator.
+  "verified": true, // Issuer-side anchor marker.
+  "createdAt": 1776530306174, // Unix timestamp in milliseconds.
+  "schemaVersion": "v2", // Current receipt schema.
+  "executionQuality": {
+    "score": 40, // EQS score from 0 to 100.
+    "flags": ["SANDWICH_DETECTED"], // Human-readable EQS flags.
+    "flagsBitmap": 64, // Canonical bitmap bound into receiptHash.
+    "algoVersion": "eqs-v1" // EQS algorithm version.
+  }
 }
 ```
 
----
+`receiptHash` is the integrity boundary. Fields such as `verified` and
+`verificationStatus` are operational conveniences returned by the reference API,
+but independent verifiers should recompute the hash and inspect the memo anchor
+directly. `executionQuality.flagsBitmap` is the flag value bound into the hash;
+`executionQuality.flags` is present so humans and clients do not need to decode
+the bitmap for ordinary UI work.
+
+## How receipts are computed
+
+The v2 receipt hash is computed from exactly six scalar fields:
+
+```text
+SHA-256(txSignature || bundleId || slot || score || flagsBitmap || algoVersion)
+```
+
+For v2, `||` means a single byte separator: `0x1f`, ASCII Unit Separator. There
+is no leading separator, trailing separator, JSON serialization, or whitespace
+normalization. `slot`, `score`, and `flagsBitmap` are stringified as base-10
+integers with no padding.
+
+This makes the hash reproducible from any implementation in any language. If a
+client has the receipt body, it can rebuild the exact byte pre-image, compute
+SHA-256, and compare the result to `receipt.receiptHash`.
+
+The separator matters. Without a separator, different field boundaries can
+produce the same concatenated string. The `0x1f` convention avoids boundary
+ambiguity while keeping the pre-image compact and easy to implement in clients,
+indexers, databases, and audit scripts.
+
+The `flags` array is not directly included in the hash. Instead, EQS flags are
+mapped into `flagsBitmap` using the alphabetical bit order defined in the EQS
+spec. During verification, the bitmap is used to recompute the hash and the
+array is checked against the bitmap for consistency. A mismatch in either value
+is treated as `HASH_MISMATCH`.
+
+The byte-level rules are specified in
+[`schema/canonical-encoding.md`](schema/canonical-encoding.md).
+
+## Execution Quality Score (EQS v1)
+
+EQS v1 assigns each receipt a 0-100 execution quality score and a deterministic
+set of flags. There are 10 flags in alphabetical bitmap order:
+`BACKRUN_SUSPECTED`, `BUNDLE_CONGESTION`, `CLEAN_EXECUTION`,
+`FEE_INEFFICIENT`, `FRONT_POSITION`, `FRONTRUN_SUSPECTED`,
+`SANDWICH_DETECTED`, `SLOT_DRIFT_HIGH`, `SOLO_BUNDLE`, and `TAIL_POSITION`.
+
+The score starts at 100 and subtracts each flag penalty, clamped to `0..100`.
+The bands are:
+
+| Band | Score |
+| --- | ---: |
+| Clean | 90-100 |
+| Acceptable | 70-89 |
+| Degraded | 40-69 |
+| Harmful | 0-39 |
+
+`executionQuality.algoVersion` is currently `eqs-v1`. Future scoring algorithm
+updates will increment `algoVersion` and may include `schemaVersion` bumps when
+hash inputs change.
+
+EQS v1 is intentionally conservative. It uses observable bundle structure,
+relative position, adjacent transaction flow, slot drift, and fee context. It is
+not a claim that every harmful trade has been fully quantified. It is a
+deterministic receipt field that lets wallets, venues, and auditors compare
+execution quality without trusting private scoring state.
+
+Full algorithm details are in [`docs/eqs-v1-spec.md`](docs/eqs-v1-spec.md).
+
+## Integration patterns
+
+### For wallet developers
+
+Use case: display a Lumen score next to every Solana trade in your wallet UI.
+Call `GET /api/v1/verify/:receiptId` for any `receiptId` your platform produces
+or receives, then display `verificationStatus` and `executionQuality.score`.
+For low-friction UX, treat `VERIFIED` as the green path, surface `UNANCHORED` as
+pending, and reserve warnings for `HASH_MISMATCH`, `MEMO_MISMATCH`,
+`ANCHOR_NOT_FOUND`, and `ANCHOR_LOOKUP_FAILED`.
+
+Code example: [`examples/verify.typescript.ts`](examples/verify.typescript.ts)
+
+### For DEX / aggregator developers
+
+Use case: stamp every trade your platform processes. POST the transaction
+signature and bundle ID to `POST /api/v1/stamp`; receive a verifiable receipt.
+Show users their `receiptId` so they can verify independently.
+The endpoint is idempotent on `txSignature`, which makes it safe to call from
+job workers or retry queues. Store the returned `receiptId`, `receiptHash`, and
+`onChainMemo` with your trade record.
+
+Code example: [`examples/stamp.typescript.ts`](examples/stamp.typescript.ts)
+
+### For auditors / researchers
+
+Use case: independently verify receipts without trusting Lumen. Recompute the
+hash, fetch the on-chain memo transaction, decode the memo instruction, and
+confirm they match.
+For large-scale analysis, cache Solana RPC lookups by `onChainMemo` and treat
+`receiptId` as an application identifier, not as a cryptographic primitive. The
+cryptographic binding is `receiptHash`.
+
+Code example: [`docs/verification-flow.md`](docs/verification-flow.md)
+
+## API reference
+
+Base URL:
+
+```text
+https://api.lumenlayer.tech
+```
+
+`POST /api/v1/stamp`
+
+Issue a receipt. Body: `{ txSignature, bundleId, walletAddress? }`. Response:
+full receipt object. Stamping is idempotent on `txSignature`. Documented stamp
+errors are `bundle_status_unavailable`, `tx_signature_not_in_bundle`,
+`anchor_signer_unavailable`, and `memo_anchor_failed`; retry behavior is exposed
+as `retryable`.
+
+Successful responses are `201` for newly issued receipts and `200` when an
+existing receipt is returned. The stamp route is rate-limited by the reference
+implementation.
+
+`GET /api/v1/verify/:receiptId`
+
+Recompute the hash, check the on-chain anchor, and return verification status.
+Response: receipt fields plus `verificationStatus`, `hashMatches`, and
+`memoMatches`. See [`docs/verification-flow.md`](docs/verification-flow.md).
+
+The verification status enum is `VERIFIED`, `HASH_MISMATCH`, `MEMO_MISMATCH`,
+`ANCHOR_NOT_FOUND`, `ANCHOR_LOOKUP_FAILED`, and `UNANCHORED`.
+
+`GET /api/v1/receipts`
+
+List the 50 most recent receipts. Each row includes `verificationStatus` inline.
+This endpoint is intended for explorers, demos, and lightweight monitoring. For
+durable application workflows, store the `receiptId` returned by `stamp` or
+delivered through webhooks.
+
+`POST /api/v1/webhooks`
+
+Register a webhook subscription. Body: `{ targetUrl, eventType? }`. Returns
+subscription metadata and a signing secret. See
+[`docs/webhook-protocol.md`](docs/webhook-protocol.md).
+The only supported event type today is `receipt.issued`.
+
+## Attestation levels
+
+`BUNDLE_VERIFIED` is the current receipt tier. It means Lumen confirmed the
+transaction against Jito bundle status metadata and anchored the receipt hash
+through the Solana memo program.
+
+`BAM_ATTESTED` is reserved for a future upgrade using Jito BAM TEE attestation
+digests when per-bundle digests are publicly exposed. Current receipts at
+`api.lumenlayer.tech` are `BUNDLE_VERIFIED`.
+
+Details are in [`docs/attestation-levels.md`](docs/attestation-levels.md).
+
+Integrators should code enum handling defensively. Unknown future attestation
+levels should not be treated as invalid receipts by default; they should be
+displayed as unrecognized until the integrator updates policy.
+
+## Webhook delivery
+
+Lumen can deliver `receipt.issued` events to integrator webhooks. Deliveries are
+signed with HMAC-SHA256 over `${timestamp}.${body}` and include
+`X-Lumen-Signature` plus `X-Lumen-Timestamp` headers. Receivers should verify
+with a constant-time comparison, reject timestamps outside a five-minute replay
+window, and process receipts idempotently by `receiptId`.
+
+The current implementation records delivery attempts and exposes recent history
+through `GET /api/v1/webhooks/:subscriptionId/deliveries`. It does not provide
+automatic retry scheduling for failed deliveries, so receivers should be simple,
+fast, and durable.
+
+Full payload and verification details are in
+[`docs/webhook-protocol.md`](docs/webhook-protocol.md).
 
 ## Self-hosting
 
-```bash
-git clone https://github.com/SimplyKairos/lumen-protocol
-cd lumen-protocol
-cp .env.example .env
-# fill in HELIUS_RPC_MAINNET, BACKEND_KEYPAIR, JITO_BLOCK_ENGINE_URL
-npm install
-npm run dev
-```
+This repo describes the protocol; it does not include a running server. The
+reference implementation lives at `api.lumenlayer.tech`. To run your own
+Lumen-compliant issuer, implement the schema and verification flow in this repo
+against your own infrastructure: Solana RPC, Jito bundle status, Solana memo
+anchoring, and SQLite or equivalent storage. The v1 reference implementation
+that previously lived in this repo is preserved in git history at the
+pre-spec-rewrite commit.
 
-The server creates its local SQLite store automatically at `data/lumen.db` on first boot.
+## Roadmap
 
----
-
-## Receipt verification — independent replay
-
-Anyone can verify a receipt without calling the Lumen API:
-
-1. Fetch the receipt from `GET /api/v1/verify/:receiptId`
-2. Recompute `SHA-256(txSignature || bundleId || slot)` — must match `receiptHash`
-3. Fetch the on-chain memo transaction from any Solana RPC
-4. Confirm the memo data matches `receiptHash`
-
-If both match the receipt is independently verified. No trust in Lumen required at any step.
-
----
+- `BAM_ATTESTED` upgrade when Jito exposes per-bundle TEE attestation digests
+- Solana Blinks integration for embedded receipt sharing
+- World ID sybil resistance for wallet damage scoring
 
 ## License
 
-Apache-2.0 — open for anyone to integrate, fork, or build on.
+Apache-2.0. Open for anyone to integrate, fork, or build on.
 
-**Links**
-- Site: [lumenlayer.tech](https://lumenlayer.tech)
-- Verifier: [lumenlayer.tech/verify](https://lumenlayer.tech/verify)
-- Explorer: [lumenlayer.tech/receipts](https://lumenlayer.tech/receipts)
-- X: [@LumenLayer](https://x.com/LumenLayer)
+## Links
+
+- Site: https://lumenlayer.tech
+- Verifier: https://lumenlayer.tech/verify
+- Receipt explorer: https://lumenlayer.tech/receipts
+- X: @LumenLayer
+- Contact: contact@lumenlayer.tech
